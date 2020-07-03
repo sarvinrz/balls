@@ -1,0 +1,635 @@
+<!DOCTYPE html>
+
+
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>shooting ball</title>
+    <style>
+
+        html, body {
+            width: 100%;
+            height: 100%;
+        }
+
+        body {
+            background-color: #ffffff;
+            margin: 0;
+            overflow: hidden;
+            font-family: arial;
+        }
+
+        #blocker {
+
+            position: absolute;
+
+            width: 100%;
+            height: 100%;
+
+            background-color: rgba(0,0,0,0.5);
+
+        }
+
+        #instructions {
+
+            width: 100%;
+            height: 100%;
+
+            display: -webkit-box;
+            display: -moz-box;
+            display: box;
+
+            -webkit-box-orient: horizontal;
+            -moz-box-orient: horizontal;
+            box-orient: horizontal;
+
+            -webkit-box-pack: center;
+            -moz-box-pack: center;
+            box-pack: center;
+
+            -webkit-box-align: center;
+            -moz-box-align: center;
+            box-align: center;
+
+            color: #ffffff;
+            text-align: center;
+
+            cursor: pointer;
+
+        }
+
+    </style>
+
+
+    <script type="text/javascript" src="lib/three.js"></script>
+    <script type="text/javascript" src="lib/OrbitControls.js"></script>
+    <script type="text/javascript" src="lib/HDRCubeTextureLoader.js"></script>
+    <script type="text/javascript" src="lib/OBJLoader.js"></script>
+    <script type="text/javascript" src="lib/Tween.js"></script>
+    <script type="text/javascript" src="lib/LegacyJSONLoader.js"></script>
+    <script type="text/javascript" src="lib/GLTFLoader.js"></script>
+
+    <script src="lib/cannon.js"></script>
+    <script src="lib/cannon.demo.js"></script>
+    <script src="lib/DDSLoader.js"></script>
+    <script src="lib/MTLLoader.js"></script>
+    <script src="lib/OBJLoader.js"></script>
+
+
+</head>
+<body>
+
+
+<div id="web-gl">
+    <div id="blocker">
+
+        <div id="instructions">
+            <span style="font-size:40px">Click to play</span>
+            <br />
+            (keyboard arrow = Move, CLICK = Shoot)
+        </div>
+
+    </div>
+</div>
+
+
+<script id="scriptScene0" type="text/javascript">
+
+    var sphereShape, sphereBody, world, physicsMaterial, walls=[], balls=[], ballMeshes=[], boxes=[], boxMeshes=[];
+    var sound, sound2;
+    var audioLoader;
+    var camera, scene, renderer;
+    var geometry, material, mesh;
+    var controls,time = Date.now();
+
+    var blocker = document.getElementById( 'blocker' );
+    var instructions = document.getElementById( 'instructions' );
+
+
+
+    var PointerLockControls = function ( camera, cannonBody ) {
+
+        //var eyeYPos = 2; // eyes are 2 meters above the ground
+        var velocityFactor = 0.2;
+        var scope = this;
+
+        var pitchObject = new THREE.Object3D();
+        pitchObject.add( camera );
+
+        var yawObject = new THREE.Object3D();
+        yawObject.position.y = 2;
+        yawObject.add( pitchObject );
+
+        var quat = new THREE.Quaternion();
+
+        var moveForward = false;
+        var moveBackward = false;
+        var moveLeft = false;
+        var moveRight = false;
+
+        //collision
+        var contactNormal = new CANNON.Vec3();
+        var upAxis = new CANNON.Vec3(0,1,0);
+        cannonBody.addEventListener("collide",function(e){
+            var contact = e.contact;
+
+            // contact.bi and contact.bj are the colliding bodies, and contact.ni is the collision normal.
+            // We do not yet know which one is which! Let's check.
+            if(contact.bi.id == cannonBody.id)  // bi is the player body, flip the contact normal
+                contact.ni.negate(contactNormal);
+            else
+                contactNormal.copy(contact.ni); // bi is something else. Keep the normal as it is
+
+        });
+
+        var velocity = cannonBody.velocity;
+
+        var PI_2 = Math.PI / 2;
+
+
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+        //keyboard control
+        var onKeyDown = function ( event ) {
+
+            switch ( event.keyCode ) {
+
+                case 38: // up
+                    moveForward = true;
+                    break;
+
+                case 37: // left
+                    moveLeft = true; break;
+
+                case 40: // down
+                    moveBackward = true;
+                    break;
+
+                case 39: // right
+                    moveRight = true;
+                    break;
+
+            }
+
+        };
+
+        var onKeyUp = function ( event ) {
+
+            switch( event.keyCode ) {
+
+                case 38: // up
+                    moveForward = false;
+                    break;
+
+                case 37: // left
+                    moveLeft = false;
+                    break;
+
+                case 40: // down
+                    moveBackward = false;
+                    break;
+
+                case 39: // right
+                    moveRight = false;
+                    break;
+
+            }
+
+        };
+
+        // document.addEventListener( 'mousemove', onMouseMove, false );
+        document.addEventListener( 'keydown', onKeyDown, false );
+        document.addEventListener( 'keyup', onKeyUp, false );
+
+        this.enabled = false;
+
+        this.getObject = function () {
+            return yawObject;
+        };
+
+        this.getDirection = function(targetVec){
+            targetVec.set(0,0,-1);
+            quat.multiplyVector3(targetVec);
+        }
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+        // Moving camera to object position & adding velocity to the object key is down
+        var inputVelocity = new THREE.Vector3();
+        var euler = new THREE.Euler();
+        this.update = function ( delta ) {
+
+            if ( scope.enabled === false ) return;
+
+            delta *= 0.1;
+
+            inputVelocity.set(0,0,0);
+
+            if ( moveForward ){
+                inputVelocity.z = -velocityFactor * delta;
+            }
+            if ( moveBackward ){
+                inputVelocity.z = velocityFactor * delta;
+            }
+
+            if ( moveLeft ){
+                inputVelocity.x = -velocityFactor * delta;
+            }
+            if ( moveRight ){
+                inputVelocity.x = velocityFactor * delta;
+            }
+
+            // Convert velocity to world coordinates
+            euler.x = pitchObject.rotation.x;
+            euler.y = yawObject.rotation.y;
+            euler.order = "XYZ";
+            quat.setFromEuler(euler);
+            inputVelocity.applyQuaternion(quat);
+
+
+            // Add to the object
+            velocity.x += inputVelocity.x;
+            velocity.z += inputVelocity.z;
+
+            yawObject.position.copy(cannonBody.position);
+        };
+    };
+    /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+    //fullscreen change
+    var havePointerLock = 'pointerLockElement' in document || 'mozPointerLockElement' in document || 'webkitPointerLockElement' in document;
+
+    if ( havePointerLock ) {
+
+        var element = document.body;
+
+        var pointerlockchange = function ( event ) {
+
+            if ( document.pointerLockElement === element || document.mozPointerLockElement === element || document.webkitPointerLockElement === element ) {
+
+                controls.enabled = true;
+
+                blocker.style.display = 'none';
+
+            } else {
+
+                controls.enabled = false;
+
+                blocker.style.display = '-webkit-box';
+                blocker.style.display = '-moz-box';
+                blocker.style.display = 'box';
+
+                instructions.style.display = '';
+
+            }
+
+        }
+
+        var pointerlockerror = function ( event ) {
+            instructions.style.display = '';
+        }
+
+        // Hook pointer lock state change events
+        document.addEventListener( 'pointerlockchange', pointerlockchange, false );
+        document.addEventListener( 'mozpointerlockchange', pointerlockchange, false );
+        document.addEventListener( 'webkitpointerlockchange', pointerlockchange, false );
+
+        document.addEventListener( 'pointerlockerror', pointerlockerror, false );
+        document.addEventListener( 'mozpointerlockerror', pointerlockerror, false );
+        document.addEventListener( 'webkitpointerlockerror', pointerlockerror, false );
+
+        //click to start game
+
+        instructions.addEventListener( 'click', function ( event ) {
+            instructions.style.display = 'none';
+
+            // Ask the browser to lock the pointer
+            element.requestPointerLock = element.requestPointerLock || element.mozRequestPointerLock || element.webkitRequestPointerLock;
+
+            if ( /Firefox/i.test( navigator.userAgent ) ) {
+
+                var fullscreenchange = function ( event ) {
+
+                    if ( document.fullscreenElement === element || document.mozFullscreenElement === element || document.mozFullScreenElement === element ) {
+
+                        document.removeEventListener( 'fullscreenchange', fullscreenchange );
+                        //document.removeEventListener( 'mozfullscreenchange', fullscreenchange );
+
+                        element.requestPointerLock();
+                    }
+
+                }
+
+                document.addEventListener( 'fullscreenchange', fullscreenchange, false );
+                // document.addEventListener( 'mozfullscreenchange', fullscreenchange, false );
+
+                element.requestFullscreen = element.requestFullscreen || element.mozRequestFullscreen || element.mozRequestFullScreen || element.webkitRequestFullscreen;
+
+                element.requestFullscreen();
+
+            } else {
+
+                element.requestPointerLock();
+
+            }
+
+        }, false );
+
+    }
+
+    init();
+    animate();
+
+    //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+    //init
+    function init() {
+
+        camera = new THREE.PerspectiveCamera( 100, window.innerWidth / window.innerHeight, 0.1, 1000 );
+
+
+
+        // Setup our world
+        world = new CANNON.World();
+        world.quatNormalizeSkip = 0;
+        world.quatNormalizeFast = false;
+
+        //sound
+        var listener = new THREE.AudioListener();
+        camera.add(listener);
+        audioLoader = new THREE.AudioLoader();
+
+        sound = new THREE.PositionalAudio(listener);
+        audioLoader.load('sound/031 Gymnastics - Rhythmic Ribbon - Radetzky March.mp3', function (buffer) {
+            sound.setBuffer(buffer);
+            sound.setRefDistance(15);
+            sound.play();
+        });
+        //scene.add(sound);
+        /*sound2 = new THREE.PositionalAudio(listener);
+        audioLoader.load('sound/Bomb+1.mp3', function (buffer) {
+            sound2.setBuffer(buffer);
+            sound2.setRefDistance(15);
+            sound2.play();
+        });
+        balls.add(sound2);*/
+
+        //gravity
+        world.gravity.set(0,-20,0);
+        world.broadphase = new CANNON.NaiveBroadphase();
+
+
+        // Create a sphere
+        var mass = 5, radius = 1.3;
+        sphereShape = new CANNON.Sphere(radius);
+        sphereBody = new CANNON.Body({ mass: mass });
+        sphereBody.addShape(sphereShape);
+        sphereBody.position.set(0,5,0);
+        sphereBody.linearDamping = 0.9;
+        world.add(sphereBody);
+
+        // Create a plane
+        var groundShape = new CANNON.Plane();
+        var groundBody = new CANNON.Body({ mass: 0 });
+        groundBody.addShape(groundShape);
+        groundBody.quaternion.setFromAxisAngle(new CANNON.Vec3(1,0,0),-Math.PI/2);
+        world.add(groundBody);
+
+        //scene
+        scene = new THREE.Scene();
+
+        //fog
+        scene.fog = new THREE.FogExp2(0xffffff, 0.0025);
+
+        //ambient light
+        var ambient = new THREE.AmbientLight( 0x111111 );
+        scene.add( ambient );
+
+        //spotlight
+        light = new THREE.SpotLight( 0xffffff );
+        light.position.set( 10, 30, 20 );
+        light.target.position.set( 0, 0, 0 );
+        if(true){
+            light.castShadow = true;
+
+            light.shadow.camera.near = 20;
+            light.shadow.camera.far = 50;//camera.far;
+            light.shadow.camera.fov = 40;
+
+            light.shadowMapBias = 0.1;
+            light.shadowMapDarkness = 0.7;
+            light.shadow.mapSize.width = 2*512;
+            light.shadow.mapSize.height = 2*512;
+
+            //light.shadowCameraVisible = true;
+        }
+        scene.add( light );
+
+        //renderer
+        renderer = new THREE.WebGLRenderer({antialias: true});
+        renderer.shadowMap.enabled = true;
+        renderer.shadowMapSoft = true;
+        renderer.setSize( window.innerWidth, window.innerHeight );
+        renderer.setClearColor(new THREE.Color(0x000000));
+        document.body.appendChild(renderer.domElement);
+        window.addEventListener( 'resize', onWindowResize, false );
+
+        //controls
+        controls = new PointerLockControls( camera , sphereBody );
+        scene.add( controls.getObject() );
+
+////////////////////////////////////////////////////////////////////////////////
+        //texture
+        //  Surface Texture
+        var texture = new THREE.TextureLoader().load('model/grass/grass.jpg');
+        texture.repeat.set(100, 100);
+        texture.wrapS = THREE.RepeatWrapping;
+        texture.wrapT = THREE.RepeatWrapping;
+        texture.magFilter = THREE.NearestFilter;
+        texture.minFilter = THREE.LinearMipMapLinearFilter;
+        texture.castShadow=true;
+        texture.receiveShadow=true;
+
+        //Surface Mesh
+        var surface = new THREE.PlaneGeometry(1300, 1350);
+        var surfaceMaterial = new THREE.MeshPhongMaterial({color: 0xcccccc, side: THREE.DoubleSide, map: texture});
+        var surfaceMesh = new THREE.Mesh(surface, surfaceMaterial);
+        surfaceMesh.rotateX(Math.PI / 2);
+        surfaceMesh.position.y = -20;
+        surfaceMesh.position.z = -300;
+        surfaceMesh.castShadow=true;
+        surfaceMesh.receiveShadow=true;
+        scene.add(surfaceMesh);
+
+        //  Road Texture
+        var textureRoad = new THREE.TextureLoader().load('model/road/road.jpg');
+
+        textureRoad.repeat.set(3, 200);
+        textureRoad.wrapS = THREE.RepeatWrapping;
+        textureRoad.wrapT = THREE.RepeatWrapping;
+        textureRoad.magFilter = THREE.LinearFilter;
+        textureRoad.minFilter = THREE.LinearMipMapLinearFilter;
+        textureRoad.castShadow=true;
+        textureRoad.receiveShadow=true;
+
+
+        var road = new THREE.PlaneGeometry(50, 1350);
+        var roadMaterial = new THREE.MeshPhongMaterial({color: 0xcccccc,side: THREE.DoubleSide, map: textureRoad});
+        var roadMesh = new THREE.Mesh(road, roadMaterial);
+        roadMesh.rotateX(Math.PI / 2);
+        roadMesh.position.y = -20;
+        roadMesh.position.z = -300;
+        scene.add(roadMesh);
+
+        var roadSecond = roadMesh.clone();
+        roadSecond.position.x = -25;
+        scene.add(roadSecond);
+
+        //  Sidewalk Texture
+        var textureSideWalk = new THREE.TextureLoader().load('model/sidewalk/sidewalk.jpg');
+        textureSideWalk.repeat.set(1, 100);
+        textureSideWalk.wrapS = THREE.RepeatWrapping;
+        textureSideWalk.wrapT = THREE.RepeatWrapping;
+        textureSideWalk.magFilter = THREE.NearestFilter;
+        textureSideWalk.minFilter = THREE.NearestFilter;
+
+        var sideWalk = new THREE.PlaneGeometry(20, 1350);
+        var sideWalkMaterial = new THREE.MeshPhongMaterial({
+            color: 0xcccccc,
+            side: THREE.DoubleSide,
+            map: textureSideWalk
+        });
+
+        var sideWalkMesh = new THREE.Mesh(sideWalk, sideWalkMaterial);
+        sideWalkMesh.rotateX(Math.PI / 2);
+        sideWalkMesh.position.y = -20;
+        sideWalkMesh.position.z = -300;
+        sideWalkMesh.position.x = -45;
+        scene.add(sideWalkMesh);
+
+        var sideWalkSecond = sideWalkMesh.clone();
+        sideWalkSecond.position.x = +20;
+        scene.add(sideWalkSecond);
+/////////////////////////////////////////////////////////////////////////////////////////
+        // Add boxes
+        var halfExtents = new CANNON.Vec3(1,1,1);
+        var boxShape = new CANNON.Box(halfExtents);
+        var boxGeometry = new THREE.BoxGeometry(halfExtents.x*2,halfExtents.y*2,halfExtents.z*2);
+        for(var i=0; i<20; i++){
+            var x = (Math.random()-0.5)*20;
+            var y = 1 + (Math.random()-0.5)*1;
+            var z = (Math.random()-0.5)*20;
+            var boxBody = new CANNON.Body({ mass: 5 });
+            boxBody.addShape(boxShape);
+            var randomColor = '#' + (Math.random() * 0xFFFFFF << 0).toString(16);
+            material2 = new THREE.MeshLambertMaterial( { color: randomColor } );
+            var boxMesh = new THREE.Mesh( boxGeometry, material2 );
+            world.add(boxBody);
+            scene.add(boxMesh);
+            boxBody.position.set(x,y,z);
+            boxMesh.position.set(x,y,z);
+            boxMesh.castShadow = true;
+            boxMesh.receiveShadow = true;
+            boxes.push(boxBody);
+            boxMeshes.push(boxMesh);
+        }
+
+
+        var objectLoader2 = new THREE.ObjectLoader();
+        objectLoader2.load("model/hotel-threejs/hotel.json", function (obj) {
+            obj=objectLoader2;
+            obj.scale.x=obj.scale.y=obj.scale.z=4;
+            obj.position.y = 0;
+            obj.position.x = 0;
+            obj.position.z = 0;
+            scene.add(obj);
+
+
+        });
+
+    }
+    //init ends
+    /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+    function onWindowResize() {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize( window.innerWidth, window.innerHeight );
+    }
+
+
+    ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+    //animate
+    var dt = 1/60;
+    function animate() {
+        requestAnimationFrame( animate );
+        if(controls.enabled){
+            world.step(dt);
+
+            // Update ball positions
+            for(var i=0; i<balls.length; i++){
+                ballMeshes[i].position.copy(balls[i].position);
+                ballMeshes[i].quaternion.copy(balls[i].quaternion);
+            }
+
+            // Update box positions
+            for(var i=0; i<boxes.length; i++){
+                boxMeshes[i].position.copy(boxes[i].position);
+                boxMeshes[i].quaternion.copy(boxes[i].quaternion);
+            }
+        }
+
+        controls.update( Date.now() - time );
+        renderer.render( scene, camera );
+        time = Date.now();
+
+    }
+    //animate ends
+    ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+    //ball
+    var ballShape = new CANNON.Sphere(0.2);
+    var ballGeometry = new THREE.SphereGeometry(ballShape.radius, 32, 32);
+    var shootDirection = new THREE.Vector3();
+    var shootVelo = 35;
+
+    //shooting ball
+    function getShootDir(targetVec){
+        var vector = targetVec;
+        targetVec.set(0,0,1);
+        vector.unproject(camera);
+        var ray = new THREE.Ray(sphereBody.position, vector.sub(sphereBody.position).normalize() );
+        targetVec.copy(ray.direction);
+    }
+    //click to shoot
+    window.addEventListener("click",function(e){
+        if(controls.enabled==true){
+            var x = sphereBody.position.x;
+            var y = sphereBody.position.y;
+            var z = sphereBody.position.z;
+            var ballBody = new CANNON.Body({ mass: 1 });
+            ballBody.addShape(ballShape);
+            var randomColor = '#' + (Math.random() * 0xFFFFFF << 0).toString(16);
+            material2 = new THREE.MeshPhongMaterial( { color: randomColor } );
+            var ballMesh = new THREE.Mesh( ballGeometry, material2 );
+            world.add(ballBody);
+            scene.add(ballMesh);
+            ballMesh.castShadow = true;
+            ballMesh.receiveShadow = true;
+            balls.push(ballBody);
+            ballMeshes.push(ballMesh);
+            getShootDir(shootDirection);
+            ballBody.velocity.set(  shootDirection.x * shootVelo,
+                shootDirection.y * shootVelo,
+                shootDirection.z * shootVelo);
+
+            // Move the ball outside the player sphere
+            x += shootDirection.x * (sphereShape.radius*1.02 + ballShape.radius);
+            y += shootDirection.y * (sphereShape.radius*1.02 + ballShape.radius);
+            z += shootDirection.z * (sphereShape.radius*1.02 + ballShape.radius);
+            ballBody.position.set(x,y,z);
+            ballMesh.position.set(x,y,z);
+        }
+    });
+
+
+
+
+
+</script>
+</body>
+</html>
